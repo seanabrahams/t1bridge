@@ -64,6 +64,31 @@ impl Attempt {
         Ok(Self { root, active })
     }
 
+    pub fn resume() -> Result<Self> {
+        let parent =
+            Directory::open(Path::new("/var/lib"), false)?.child("t1bridge", false, false)?;
+        let root = parent.child("recovery", false, true)?;
+        root.lock()
+            .map_err(|_| Error("another recovery process holds the attempt lock"))?;
+        let active = root.child("active", false, true)?;
+        if active.exists("complete")? {
+            return Err(Error("recovery attempt already complete"));
+        }
+        let mut marker = Vec::new();
+        active
+            .file("started", false)?
+            .take(64)
+            .read_to_end(&mut marker)?;
+        if marker != b"native-recovery-v1\n" {
+            return Err(Error("invalid saved recovery marker"));
+        }
+        Ok(Self { root, active })
+    }
+
+    pub fn existing_phase(&self, phase: &str) -> Result<Directory> {
+        Ok(self.active.child(phase, false, true)?)
+    }
+
     pub fn phase(&self, phase: &str) -> Result<Directory> {
         if self.active.exists(phase)? {
             return Err(Error("recovery phase already has artifacts"));

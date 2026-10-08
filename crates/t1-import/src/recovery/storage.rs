@@ -230,4 +230,59 @@ mod tests {
         assert!(!apple.exists("EMBEDDEDOS").unwrap());
         std::fs::remove_dir_all(path).unwrap();
     }
+
+    #[test]
+    fn every_staging_prefix_blocks_repeated_publication_without_changing_data() {
+        let artifacts: [(&str, &[u8]); 3] = [
+            ("FDRData", b"synthetic fdr"),
+            ("combined.memboot", b"synthetic image"),
+            ("version.plist", b"synthetic version"),
+        ];
+        for count in 0..=artifacts.len() {
+            let path = std::env::temp_dir().join(format!(
+                "t1-recovery-stage-prefix-synthetic-{}-{count}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            let apple = Directory::open(&path, false).unwrap();
+            let stage = apple.child("EMBEDDEDOS.recovery", true, false).unwrap();
+            for (name, bytes) in &artifacts[..count] {
+                save(&stage, name, bytes).unwrap();
+            }
+            drop(stage);
+            drop(apple);
+
+            // Reopen as a subsequent invocation would after an interruption.
+            let apple = Directory::open(&path, false).unwrap();
+            for _ in 0..2 {
+                assert!(
+                    install_generation(&apple, b"new fdr", b"new image", b"new version").is_err()
+                );
+                assert!(!apple.exists("EMBEDDEDOS").unwrap());
+                let stage_path = path.join("EMBEDDEDOS.recovery");
+                assert_eq!(std::fs::read_dir(&stage_path).unwrap().count(), count);
+                for (name, bytes) in &artifacts[..count] {
+                    assert_eq!(std::fs::read(stage_path.join(name)).unwrap(), *bytes);
+                }
+            }
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn each_missing_artifact_is_rejected_before_staging() {
+        let path = std::env::temp_dir().join(format!(
+            "t1-recovery-missing-artifact-synthetic-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let apple = Directory::open(&path, false).unwrap();
+        for missing in 0..3 {
+            let mut artifacts: [&[u8]; 3] = [b"fdr", b"image", b"version"];
+            artifacts[missing] = b"";
+            assert!(install_generation(&apple, artifacts[0], artifacts[1], artifacts[2]).is_err());
+            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }
